@@ -40,11 +40,13 @@
 #define MAX_RINGS               4
 #define MAX_TIME_SINCE_RING     7
 
+#define HANGUP_WHEN_NO_DIAL_TONE
+
 // #define TEST
-#define DTMF_DEBUG
+// #define DTMF_DEBUG
 // #define DTMF_DEBUG_PRINT
 #define TIME_DEBUG
-#define HANGUP_WHEN_NO_DIAL_TONE
+// #define SHOW_TIME
 
 #define TIME(h,m,s) (3600UL*h+60*m+s)
 
@@ -322,9 +324,6 @@ void send_from_string(char* text, uint8_t len) {
 }
 
 void enable_dtmf() {
-    print_char('{');
-    print_char('e');
-    print_char('}');
     adc_sample_num = 0;
     TCNT0 = 0;
     TIFR0 |= 0b00000010;
@@ -344,9 +343,6 @@ ISR(ADC_vect) {
     //if (ADCH > 128) data[adc_sample_num] = -ADCH;
     adc_sample_num++;
     if (adc_sample_num >= NDTMFSAMPLES) {
-        strcpy(txbuf, "dtmf done\r\n");
-        txbuflen = 11;
-        print_txbuf();
         disable_dtmf();
         //PORTB &= 0b01111111;
     }
@@ -406,7 +402,7 @@ ISR(TIMER4_COMPA_vect) {
                 timer_states |= 0b00100001;
                 //flags |= 0b00000001;
                 set1 = TIME(0, 30, 0);
-                set1_to_afterBreakfast = 3600*1.5;
+                set1_to_afterBreakfast = TIME(1, 30, 0);
                 send(0x80, 0);
                 send_from_string("carba + mido", 12);
                 flags |= 0b00000110;
@@ -608,19 +604,19 @@ ISR(TIMER1_COMPA_vect) {
                 switch (timer_states & 0b00000011) {
                     case 0b01:
                         // 30m:     breakfast
-                        send_from_string("breakfast      ", 15);
+                        send_from_string("breakfast       ", 16);
                         timer_states = (timer_states & 0b11111100) | 0b10;
-                        set1 = 3600*4;
+                        set1 = TIME(13, 30, 0) - currentTime;
+                        if (set1 < TIME(4, 0, 0)) set1 = TIME(4, 0, 0);
                         //recv = 'd';         // just a test
                         //action = 2;
                         break;
                     case 0b10:
                         // 4h30m:   carba + mido + eset
-                        send_from_string("carba,mido,eset", 15);
+                        send_from_string("carba,mido,eset ", 16);
                         timer_states = (timer_states & 0b11111100) | 0b11;
                         // Next dose of carba+omir must be after 17:30
-                        set1 = TIME(17, 30, 0) - currentTime;
-                        if (set1 < TIME(4, 30, 0)) set1 = TIME(4, 30, 0);
+                        set1 = TIME(4, 30, 0);
 #ifndef TEST
                         recv = 'd';         // Dial the telephone
                         action = 3;         // Play 3 once connection is established
@@ -629,7 +625,7 @@ ISR(TIMER1_COMPA_vect) {
                         break;
                     case 0b11:
                         // 9h: carba (spaces to clear display)
-                        send_from_string("carba,omir     ", 16);
+                        send_from_string("carba,omir      ", 16);
                         timer_states &= 0b11111100;
 #ifndef TEST
                         recv = 'd';         // Dial the telephone
@@ -650,15 +646,14 @@ ISR(TIMER1_COMPA_vect) {
                     // Set 2 starts either 1.5 hours after set 1, or at 10:30, whichever comes first
                     timer_states |= 0b00000100;     // start afterBreakfast
                     timer_states &= 0b11011111;     // stop set1_to_afterBreakfast
-                    afterBreakfast = TIME(16, 0, 0) - currentTime;                          // At least 16:00:00
-                    if (afterBreakfast < TIME(6, 0, 0)) afterBreakfast = TIME(6, 0, 0);     // At least 6 hours
-                    if (afterBreakfast > TIME(7, 0, 0)) afterBreakfast = TIME(7, 0, 0);     // But at most 7 hours
+                    afterBreakfast = TIME(16, 30, 0) - currentTime;
+                    if (afterBreakfast > TIME(6, 30, 0)) afterBreakfast = TIME(6, 30, 0);     // 6.5 hours later, but no later than 16:30:00
                     strcpy(txbuf, "to next -----\r\n");
                     txbuflen = 15;
-                    printdec(afterBreakfast, 5, 8);
+                    printdec(currentTime, 5, 8);
                     print_txbuf();
                     send(0x80, 0);
-                    send_from_string("gab + AM reg   ", 15);
+                    send_from_string("gab + AM reg    ", 16);
                     flags |= 0b00000110;
 #ifndef TEST
                     recv = 'd';         // Dial the telephone
@@ -668,69 +663,80 @@ ISR(TIMER1_COMPA_vect) {
                 }
             }
         }
-        if (timer_states & 0b00001100) {
+        
+        
+        if ((timer_states & 0b00001100) == 0b0100) {
             if (afterBreakfast > 0) afterBreakfast --;
             if (afterBreakfast == 0) {
                 send(0x80, 0);
-                switch (timer_states & 0b00001100) {
-                    case 0b0100:
-                        // 6h:      gab
-                        strcpy(txbuf, "gab -----\r\n");
-                        txbuflen = 11;
-                        printdec(currentTime, 5, 4);
-                        print_txbuf();
-                        OCR2A = BACKLIGHT_BRIGHT;
-                        flags |= 0b00000110;
-                        send_from_string("gab            ", 15);
-                        timer_states = (timer_states & 0b10110011) | 0b1000;
-                        afterBreakfast = 3600*6;
+                // 6.5h:      gab
+                strcpy(txbuf, "gab -----\r\n");
+                txbuflen = 11;
+                printdec(currentTime, 5, 4);
+                print_txbuf();
+                OCR2A = BACKLIGHT_BRIGHT;
+                flags |= 0b00000110;
+                send_from_string("gab             ", 16);
+                timer_states = (timer_states & 0b10110011) | 0b1000;
+                afterBreakfast = TIME(22, 30, 0) - currentTime;
 #ifndef TEST
-                        recv = 'd';         // Dial the telephone
-                        action = 4;         // Play 4 once connection is established
-                        enable_dtmf();      // It may be necessary to start DTMF if it is not running
+                recv = 'd';         // Dial the telephone
+                action = 4;         // Play 4 once connection is established
+                enable_dtmf();      // It may be necessary to start DTMF if it is not running
 #endif
-                        break;
-                    case 0b1000:
-                        // 12h:     gab + PM reg
-                        strcpy(txbuf, "gab+p -----\r\n");
-                        txbuflen = 13;
-                        printdec(currentTime, 5, 6);
-                        print_txbuf();
-                        OCR2A = BACKLIGHT_BRIGHT;
-                        flags |= 0b00000110;
-                        send_from_string("gab + PM reg   ", 15);
-                        timer_states = (timer_states & 0b11110011) | 0b1100;
-                        afterBreakfast = 3600*0.5;
-#ifndef TEST
-                        recv = 'd';         // Dial the telephone
-                        action = 6;         // Play 6 once connection is established
-                        enable_dtmf();      // It may be necessary to start DTMF if it is not running
-#endif
-                        break;
-                    case 0b1100:
-                        // 12h30m:  clon
-                        strcpy(txbuf, "clon -----\r\n");
-                        txbuflen = 12;
-                        printdec(currentTime, 5, 5);
-                        print_txbuf();
-                        OCR2A = BACKLIGHT_BRIGHT;
-                        flags |= 0b00000110;
-                        send_from_string("clon           ", 15);
-                        timer_states = 0b00000000;       // clon is always last
-                        afterBreakfast = 0;
-                        set1 = 0;
-                        set1_to_afterBreakfast = 0;
-#ifndef TEST
-                        recv = 'd';         // Dial the telephone
-                        action = 7;         // Play 7 once connection is established
-                        enable_dtmf();      // It may be necessary to start DTMF if it is not running
-#endif
-                        break;
-                }
             }
         }
+        
+        if (afterBreakfast > 0 && timer_states & 0b00001000) afterBreakfast--;
+        
+        if (currentTime == TIME(22, 30, 0) && (timer_states & 0b00001100) == 0b1000) {
+            // 12h:     gab + PM reg
+            strcpy(txbuf, "gab+p -----\r\n");
+            txbuflen = 13;
+            printdec(currentTime, 5, 6);
+            print_txbuf();
+            OCR2A = BACKLIGHT_BRIGHT;
+            flags |= 0b00000110;
+            send(0x80, 0);
+            send_from_string("gab + PM reg    ", 16);
+            timer_states |= 0b00001100;
+            afterBreakfast = TIME(0, 30, 0);
+#ifndef TEST
+            recv = 'd';         // Dial the telephone
+            action = 6;         // Play 6 once connection is established
+            enable_dtmf();      // It may be necessary to start DTMF if it is not running
+#endif
+        }
+        
+        if (currentTime == TIME(23, 0, 0) && (timer_states & 0b00001100) == 0b1100) {
+            // 23:00 (abs):  clon
+            strcpy(txbuf, "clon -----\r\n");
+            txbuflen = 12;
+            printdec(currentTime, 5, 5);
+            print_txbuf();
+            OCR2A = BACKLIGHT_BRIGHT;
+            flags |= 0b00000110;
+            send(0x80, 0);
+            send_from_string("clon            ", 16);
+            timer_states = 0b00000000;       // clon is always last
+            afterBreakfast = 0;
+            set1 = 0;
+            set1_to_afterBreakfast = 0;
+#ifndef TEST
+            recv = 'd';         // Dial the telephone
+            action = 7;         // Play 7 once connection is established
+            enable_dtmf();      // It may be necessary to start DTMF if it is not running
+#endif
+        }
     }
+    
+    
+    
+    
     PORTB &= 0b10111111;
+#ifdef TEST
+    if (!waiting)
+#endif
     currentTime = (currentTime+1)%(3600UL*24);
     flags |= 0b10000000;
 }
@@ -943,10 +949,6 @@ int main() {
     
     
     while (1) {
-        if (flags & 0b10000000) {
-            print_str("###\r\n");
-            flags &= 0b01111111;
-        }
         if (flags & 0b00000001) {
             send_from_txbuf();
             flags &= 0b11111110;
@@ -1055,7 +1057,7 @@ int main() {
 #endif
 
 #ifdef TIME_DEBUG
-                strcpy(txbuf, "-----,-----,-----,-----,-----\r\n");
+                strcpy(txbuf, "-----,-----,-----,-----,-----;");
                 printdec(set1, 5, 0);
                 printdec(beforeDinner, 5, 6);
                 printdec(afterBreakfast, 5, 12);
@@ -1064,6 +1066,8 @@ int main() {
                 txbuflen = 31;
                 print_txbuf();
                 while(txbuflen);
+                print_hex(timer_states);
+                newline_block();
 #endif
             }
             
@@ -1192,9 +1196,11 @@ int main() {
                 uint8_t hours = temp_time/3600;
                 uint8_t seconds = temp_time%60;
                 uint8_t minutes = (temp_time%3600)/60;
-                /*uint8_t thours = currentTime/3600;
+#ifdef SHOW_TIME
+                uint8_t thours = currentTime/3600;
                 uint8_t tseconds = currentTime%60;
-                uint8_t tminutes = (currentTime%3600)/60;*/
+                uint8_t tminutes = (currentTime%3600)/60;
+#endif
                 lcdbuf[0] = hours/10 + '0';
                 lcdbuf[1] = hours%10 + '0';
                 lcdbuf[2] = ':';
@@ -1203,17 +1209,21 @@ int main() {
                 lcdbuf[5] = ':';
                 lcdbuf[6] = seconds/10 + '0';
                 lcdbuf[7] = seconds%10 + '0';
-                
-                /*lcdbuf[8] = thours/10 + '0';
+                lcdbuflen = 8;
+#ifdef SHOW_TIME
+                lcdbuf[8] = thours/10 + '0';
                 lcdbuf[9] = thours%10 + '0';
                 lcdbuf[10] = ':';
                 lcdbuf[11] = tminutes/10 + '0';
                 lcdbuf[12] = tminutes%10 + '0';
                 lcdbuf[13] = ':';
                 lcdbuf[14] = tseconds/10 + '0';
-                lcdbuf[15] = tseconds%10 + '0';*/
-                lcdbuflen = 8;
+                lcdbuf[15] = tseconds%10 + '0';
+                lcdbuflen = 16;
+                send(0x80 | 0x40, 0);
+#else
                 send(0x80 | 0x48, 0);
+#endif
                 send_from_txbuf();
             }
             
